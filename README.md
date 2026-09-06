@@ -46,7 +46,11 @@ cd orchestrate-skill && scripts/install.sh
 `~/.claude/skills`, installs `/quick` and `/build` into `~/.claude/commands`, and applies
 `scripts/patch-delegate-setup.mjs`: a backward-compatible change that lets a lane carry an optional
 `"roles": ["ui"]` array (validated by `config.mjs`, stripped by `lane.mjs` before relays see it).
-The patch is idempotent and fails loudly if your delegate-setup version differs.
+It also adds an agy-only boolean dial `skipPermissions`: headless `agy --print` cannot prompt and
+auto-denies writes, so an agy lane with `"skipPermissions": true` makes the relay auto-approve tool
+requests (treat those runs as full access). Set it with `$delegate-setup` or by editing
+`~/.config/delegate-skills/config.json`. The patch is idempotent and fails loudly if your
+delegate-setup version differs.
 
 Verify:
 

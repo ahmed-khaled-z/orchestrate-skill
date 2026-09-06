@@ -50,6 +50,66 @@ const edits = [
 `,
     marker: "`roles` (optional)",
   },
+  // agy: optional boolean dial `skipPermissions` (headless print mode cannot prompt for writes).
+  {
+    file: "scripts/implementers.mjs",
+    from: `      match: /\\.db$/,
+    },
+    supports: ["model", "timeout"],
+    winShell: false,
+  },`,
+    to: `      match: /\\.db$/,
+    },
+    // skipPermissions: headless print mode cannot prompt; see lane.mjs for the relay mapping.
+    supports: ["model", "timeout", "skipPermissions"],
+    winShell: false,
+  },`,
+    marker: '"timeout", "skipPermissions"',
+  },
+  {
+    file: "scripts/implementers.mjs",
+    from: `  "force",
+  "provider",
+]);`,
+    to: `  "force",
+  "provider",
+  "skipPermissions",
+]);`,
+    marker: '  "skipPermissions",\n]);',
+  },
+  {
+    file: "scripts/config.mjs",
+    from: `    if (field === "readOnly" || field === "force") {`,
+    to: `    if (field === "readOnly" || field === "force" || field === "skipPermissions") {`,
+    marker: 'field === "skipPermissions"',
+  },
+  {
+    file: "scripts/lane.mjs",
+    from: `  // claude / cursor / pi keep readOnly as a boolean on opts
+  return dials;`,
+    to: `  if (implementerKey === "agy" && dials.skipPermissions !== undefined) {
+    // agy relay opts field for its permission-bypass flag
+    dials.dangerouslySkipPermissions = dials.skipPermissions === true;
+    delete dials.skipPermissions;
+  }
+  // claude / cursor / pi keep readOnly as a boolean on opts
+  return dials;`,
+    marker: "dials.skipPermissions",
+  },
+  {
+    file: "references/schema.md",
+    from: "| `agy` | agy-delegate | `agy` | model, timeout |",
+    to: "| `agy` | agy-delegate | `agy` | model, timeout, skipPermissions |",
+    marker: "model, timeout, skipPermissions",
+  },
+  {
+    file: "references/schema.md",
+    from: "Boolean dials: `readOnly`, `force`. All other dials are non-empty strings.",
+    to: `Boolean dials: \`readOnly\`, \`force\`, \`skipPermissions\` (agy only: headless print mode cannot prompt,
+so \`true\` lets the relay auto-approve tool requests; treat such runs as full access). All other
+dials are non-empty strings.`,
+    marker: "`force`, `skipPermissions`",
+  },
 ];
 
 let changed = 0;
