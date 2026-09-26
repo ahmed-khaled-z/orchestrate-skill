@@ -35,6 +35,23 @@ Failure classes: routing columns omitted (effort, review, tests) → structural 
 table); do-it-myself and skip-ceremony rationalizations → red-flag table; escalation unstated →
 predicate list with a required one-line announcement.
 
+## Specialist routing scenarios
+
+| # | Scenario | Expected |
+| --- | --- | --- |
+| J | Scenario A (USD typo) | Owner Minimal Change Engineer with a fit line and absolute path; no advisors; lane, model, effort identical to a run without this feature |
+| K | Scenario E (audit log: backend, UI, docs) | Three owners chosen through `find` with fit lines; T1 ∥ T2 (disjoint files); docs after T1; one `<specialist>` per brief |
+| L | "Add refund endpoint; must not weaken auth" touching one handler file | Read-only security advisor task first (`review` lane), `touchedFiles` empty; one writable owner whose `<context>` carries the attributed findings; no concurrent writers |
+| M | Brief names a profile removed from the fake roster; separately, user names a missing profile | First: missing shown in the table, replacement chosen with reason. Second: stop and ask |
+| N | Fake roster with no fitting profile | Two `find` queries shown, stop before dispatch, closest rejects listed with reasons |
+
+Precedence is checked in J–L: each brief carries the precedence sentence, and the Agents
+Orchestrator profile (which instructs spawning agents) chosen as a forced owner in a J variant does
+not cause the delegate brief to permit spawning.
+
+Separation from the fleet is checked in J and K: the Role→Lane, Implementer, Model, and Effort cells
+equal the `fleet.mjs pick` / `effort` output, and swapping the chosen specialist changes none of them.
+
 ## With skill — GREEN
 
 Recorded in `tests/results.md` after each run.

@@ -82,3 +82,79 @@ effort on any task; shared contract or public API; security, auth, payments, sen
 state, concurrency, data, or schema change; performance risk; unfamiliar integration; non-trivial UI
 interaction; scope grew during work. A mechanical quick edit with passing targeted checks skips
 review and the report says so.
+
+## 5. Specialists
+
+### Selection
+
+Once per run, before the first `find`: `node specialists.mjs audit`. Carry any non-empty list into
+the plan; profiles on problem lists are unavailable.
+
+Per dispatched task, after lane and effort are fixed:
+
+1. List the task's acceptance criteria.
+2. `find --query "<domain terms>"` (e.g. "postgres migration schema"). Score orders; it never selects.
+3. **Choose the owner.** Read descriptions; pick the profile covering the most criteria. Write the
+   fit as one line naming the criterion. For mechanical edits (quick role, ponytail ultra), start
+   from Minimal Change Engineer and keep it unless a domain profile fits better.
+4. **Broaden once.** No fit → rerun `find --query` with broader terms, `--limit 25`.
+5. **Stop.** Still no justified fit → stop before dispatch. Report the task, both queries, closest
+   rejected candidates with one-line reasons. Never invent a specialist, never dispatch without an
+   owner, never pick a poor fit.
+6. **Resolve.** `find --name "<chosen>"` → exits 0 with the `profile` path for the brief. Exit 1
+   follows Missing profiles (§5 Missing or unreadable profiles).
+7. **Advisors.** Add one only when it owns a distinct verifiable acceptance criterion outside the
+   owner's expertise. Resolve each the same way.
+
+A specialist the user named explicitly skips steps 2–5 and goes straight to step 6.
+
+### One owner, minimal advisors
+
+- **One owner per dispatched task, always.** The owner is the only specialist whose persona the
+  writable delegate adopts.
+- **Second specialist only for a distinct verifiable outcome.** It must own at least one acceptance
+  criterion the owner's expertise does not cover (e.g. "no new auth bypass" alongside "refund
+  totals correct"). An advisor that cannot name its criterion is dropped. Wanting a second opinion
+  is what `debate-review` is for.
+- **Genuinely separate surfaces become separate tasks,** each with its own owner (backend owner, UI
+  owner, docs owner), following build.md decomposition.
+
+### Collision handling
+
+- Parallel writable tasks only when their `<scope>` file sets are disjoint (unchanged build.md rule).
+  Each has its own owner.
+- Overlapping scope is serial. When two specialists' criteria land in the same files, the
+  collaboration is always: advisors run first as read-only tasks (lane from `fleet.mjs pick --need
+  review --read-only`, or `plan` for design advice), `touchedFiles` verified empty; then exactly
+  one writable owner task applies the synthesized findings.
+- Advisors on the same owner may run in parallel with each other; they write nothing.
+- Conflicting advice is resolved by the orchestrator before the owner dispatch and the decision is
+  written into the owner's `<context>`. Unresolvable conflict → ask the user.
+- An advisor that fails follows SKILL.md Fallback (retry once, next read-only candidate). Still no
+  findings → stop and report; the owner is not dispatched with that criterion unexamined.
+
+### Precedence
+
+Inside a delegate, highest first:
+
+1. The user's explicit instructions and repository `CLAUDE.md` / `AGENTS.md`.
+2. `<action_safety>` (no commits, no pushes, no spawned agents, no scope growth).
+3. The brief: `<scope>`, `<leave_untouched>`, `<requirements>`, `<acceptance_criteria>`, `<report_contract>`.
+4. `<required_skills>`, including `ponytail`.
+5. The specialist profile: domain judgment only.
+
+The brief states this in one sentence. Profile instructions that conflict (spawn agents, run pipelines,
+produce extra deliverables, require eval suites, change the report format) yield to items 1–4.
+
+### Missing or unreadable profiles
+
+| Situation | Behavior |
+| --- | --- |
+| `audit` not ok at run start | Report the lists in the plan; profiles on the problem lists are unavailable. Continue with the rest. |
+| Orchestrator-chosen profile missing at resolve (`find --name` exit 1) | Say so in the routing table, rerun selection steps 2–6, and record the replacement with its reason. |
+| User-named profile missing | Stop and ask. No substitute. |
+| Delegate cannot read `profile` | Delegate stops and reports; orchestrator treats it as the missing-profile row above. |
+| No justified fit after broadening | Stop and report (step 5). |
+| One runtime root missing | `audit` not ok; `find` still returns profiles from the other root with a `null` twin path. |
+
+Every row is visible in the routing table or the report. No silent substitution.

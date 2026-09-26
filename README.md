@@ -23,6 +23,7 @@ Installed as skills next to this one (`~/.agents/skills/`):
 - `ponytail` (plugin), `ui-ux-pro-max`, `frontend-design`.
 - The Superpowers plugin (`brainstorming`, `writing-plans`, `systematic-debugging`,
   `test-driven-development`, `verification-before-completion`, `receiving-code-review`, …).
+- **Agency Agents** installed in both `~/.claude/agents/` and `~/.codex/agents/` — `scripts/specialists.mjs` scans both rosters, pairs profiles by exact name, and fails loud on mismatches. See [msitarzewski/agency-agents](https://github.com/msitarzewski/agency-agents).
 - Node 18+.
 
 ## Install
@@ -77,9 +78,9 @@ source of truth. Reconfigure lanes with `$delegate-setup` and the next run uses 
 changes.
 
 ```bash
-node scripts/fleet.mjs list --cwd <repo>                         # live lanes with roles and dials
-node scripts/fleet.mjs pick --need ui --write --cwd <repo>       # ranked candidates for a role
-node scripts/fleet.mjs effort --lane review-main --level medium  # relay flag, if the lane has a dial
+node skills/orchestrate/scripts/fleet.mjs list --cwd <repo>                         # live lanes with roles and dials
+node skills/orchestrate/scripts/fleet.mjs pick --need ui --write --cwd <repo>       # ranked candidates for a role
+node skills/orchestrate/scripts/fleet.mjs effort --lane review-main --level medium  # relay flag, if the lane has a dial
 ```
 
 Roles: `quick feature ui debug tests docs plan review`. A lane's declared `roles` wins; otherwise
@@ -90,12 +91,53 @@ and `frontend-design`; one exact Superpowers skill per observable trigger.
 
 Details: `skills/orchestrate/references/routing.md`, `build.md`, `brief.md`, `examples.md`.
 
+## Specialist routing
+
+Every dispatched task gets exactly one **owner** specialist whose expertise covers the most
+acceptance criteria. The orchestrator runs `scripts/specialists.mjs audit` once per run, then
+`find --query "<domain terms>"` per task to rank candidates, picks the owner, and resolves the
+absolute profile path with `find --name`. The brief's `<specialist>` element carries a one-line
+`fit` tying the specialist to a named criterion.
+
+**Optional read-only advisors** are added only when a distinct verifiable acceptance criterion
+falls outside the owner's expertise (e.g., a security advisor for "no new auth bypass" alongside
+a backend owner for "refund totals correct"). Advisors run first on a `review` or `plan`
+read-only lane as appropriate, produce findings with empty `touchedFiles`, and the owner's brief
+receives the attributed findings in its context.
+
+**Missing profiles:**
+- Orchestrator-chosen missing profile: reselected and reported.
+- User-named missing profile: stops for input.
+- No justified fit after broadening: stops.
+
+No silent substitution in any case.
+
+```bash
+node skills/orchestrate/scripts/specialists.mjs audit                      # scan both rosters, exit 1 on any mismatch
+node skills/orchestrate/scripts/specialists.mjs find --query "postgres schema"  # rank candidates by keyword overlap
+node skills/orchestrate/scripts/specialists.mjs find --name "Backend Architect" # exact match → absolute profile path
+```
+
+Details: `skills/orchestrate/references/routing.md` §5.
+
 ## Tests
 
 - `tests/fleet.test.mjs`: script tests, including "reconfigure the fleet, rerun, new lane is used".
+- `tests/specialists.test.mjs`: specialist discovery tests — audit (twins, mismatches, duplicates,
+  bad files), find (deterministic scoring, `--limit`, exact `--name`, no cache, CLAUDE_CONFIG_DIR/
+  CODEX_HOME override).
 - `tests/scenarios.md` and `tests/results.md`: behavioral scenarios (tiny fix, UI feature, hard bug,
   parallel work, review findings, quick→build escalation, false success claim) with baseline vs
   with-skill results, following the Superpowers `writing-skills` RED→GREEN→REFACTOR method.
+- Specialist routing scenarios J–N in `scenarios.md`: owner fit lines, advisor separation,
+  collision handling, missing-profile behavior, no-fit stop.
+
+Run both test suites:
+
+```bash
+node --test ~/.agents/skills/orchestrate/tests/fleet.test.mjs
+node --test ~/.agents/skills/orchestrate/tests/specialists.test.mjs
+```
 
 ## Uninstall
 

@@ -1,10 +1,10 @@
 ---
 name: orchestrate
-description: Use when the user invokes /quick or /build, or asks to ship, fix, build, refactor, or deliver repository code through the delegate fleet, or asks which lane, model, effort, or skills a coding task should get. Not for configuring lanes (delegate-setup) or reviewing a PR on its own (debate-review).
+description: Use when the user invokes /quick or /build, or asks to ship, fix, build, refactor, or deliver repository code through the delegate fleet, or asks which lane, model, effort, skills, or specialist a coding task should get. Not for configuring lanes (delegate-setup) or reviewing a PR on its own (debate-review).
 license: MIT
 compatibility: Requires Node 18+, delegate-setup and at least one *-delegate skill installed beside this skill, ponytail, ui-ux-pro-max, frontend-design, debate-review, babysit-pr, and the Superpowers skills available to delegates.
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # Orchestrate
@@ -41,26 +41,34 @@ never downgrades.
    per task role, following [references/routing.md](references/routing.md). Lanes, implementers,
    models, and dials come only from that output. Never from memory, never hardcoded here.
 4. **Plan tasks** (build only): decompose, build the dependency graph, decide what runs in parallel.
-5. **Brief** each task with [references/brief.md](references/brief.md). Fill every slot.
-6. **Dispatch** with the lane's relay (`--lane <name>`, plus `--effort` only when `fleet.mjs effort`
+   For quick, this step is implicit and produces one task.
+5. **Pick specialists.** Run `node "<skill-dir>/scripts/specialists.mjs" audit` once per run.
+   Per task, after fleet and effort are fixed, run `find --query` with the task's domain terms,
+   choose the owner whose expertise covers the most acceptance criteria (routing.md §5 Selection),
+   then resolve `find --name` for the absolute profile path. Advisors only for a distinct
+   verifiable acceptance criterion outside the owner's expertise (routing.md §5 One owner, minimal advisors; Collision handling).
+6. **Brief** each task with [references/brief.md](references/brief.md). Fill every slot, including
+   the `<specialist>` element.
+7. **Dispatch** with the lane's relay (`--lane <name>`, plus `--effort` only when `fleet.mjs effort`
    returns a flag; `--read-only` for diagnosis, planning, review). Run relays in the background;
-   independent tasks concurrently.
-7. **Verify** with fresh commands you run: tests, lint, typecheck, build, the diff against the brief,
+   independent tasks concurrently. Advisors (read-only) before the owner (writable).
+8. **Verify** with fresh commands you run: tests, lint, typecheck, build, the diff against the brief,
    `touchedFiles`. `verification-before-completion` applies to you on every run.
-8. **Review** when a trigger in routing.md §4 holds: `debate-review` (`--local` without a PR).
-9. **Fix findings** via the review lifecycle in build.md: `babysit-pr` when a PR exists,
-   `receiving-code-review` in every fix brief, re-review only affected areas.
-10. **Report** (format below). Worked runs: [references/examples.md](references/examples.md).
+9. **Review** when a trigger in routing.md §4 holds: `debate-review` (`--local` without a PR).
+10. **Fix findings** via the review lifecycle in build.md: `babysit-pr` when a PR exists,
+    `receiving-code-review` in every fix brief, re-review only affected areas.
+11. **Report** (format below). Worked runs: [references/examples.md](references/examples.md).
 
 ## Per-task routing table (required before the first dispatch)
 
 Show it in chat for build; keep it in your head for quick but every column still gets decided.
 
 ```text
-Task | Role→Lane | Implementer | Model | Effort (dial or brief-only) | Skills | Depends on | Verify
+Task | Role→Lane | Implementer | Model | Effort (dial or brief-only) | Specialist | Skills | Depends on | Verify
 ```
 
 - **Effort** per task from routing.md §2: low / medium / high. Never one level for the whole request.
+- **Specialist** per task from routing.md §5: one installed profile name with a one-line fit tying it to a named acceptance criterion. Advisors are separate rows with `role="advisor" feeds="<owner id>"`.
 - **Skills** per task from routing.md §3: `ponytail` always; UI pair only for visual work; one exact
   Superpowers skill per observable trigger; nothing else.
 - **Review** decision per routing.md §4, stated even when it is "none: mechanical quick edit".
@@ -78,7 +86,9 @@ Relay error or timeout that looks transient → retry once. Lane, binary, or mod
 re-run `fleet.mjs pick` and take the next candidate with the same role, keeping the same effort and
 skills; a `fallback: true` candidate or an empty list is reported, not hidden. Missing skill in the
 delegate's environment → pass the absolute `SKILL.md` path in the brief; if it still cannot load,
-try another candidate, then stop and report. Never substitute an arbitrary model silently.
+try another candidate, then stop and report. Missing or unreadable specialist profile → handled per
+routing.md §5 (Missing or unreadable profiles); no silent substitution. Never substitute an
+arbitrary model silently.
 
 ## Report
 
@@ -98,3 +108,6 @@ risks. No transcript.
 | "Give it all the skills to be safe" | Skill overload dilutes the brief. Minimum exact set. |
 | "I remember the UI lane is model X" | Run `fleet.mjs`. The fleet changed since you last looked. |
 | "Review findings = new feature, restart the workflow" | Findings go through the fix lifecycle (`babysit-pr` / re-dispatch), not brainstorming. |
+| "One specialist for everything" | One owner per task. Advisor only for a distinct verifiable criterion outside owner's expertise. |
+| "Specialist decides the lane" | Specialist never touches lane, model, or effort — fleet-only routing (routing.md §5). |
+| "No match? Pick the closest anyway" | Stop and report. Never invent a specialist. |
