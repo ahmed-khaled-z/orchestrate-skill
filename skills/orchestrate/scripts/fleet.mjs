@@ -8,6 +8,7 @@
  *   node fleet.mjs list   [--cwd <repo>]
  *   node fleet.mjs pick   --need <role> [--write | --read-only] [--exclude <lane>]... [--cwd <repo>]
  *   node fleet.mjs effort --lane <name> --level low|medium|high [--cwd <repo>]
+ *   node fleet.mjs preflight --lane <name> [--level low|medium|high] [--read-only] [--cwd <repo>]
  *   node fleet.mjs --help
  *
  * Roles (routing vocabulary, not lane config):
@@ -16,9 +17,10 @@
  * from the lane name. Node built-ins only. No network, no writes.
  */
 
-import { existsSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 
 const HELP = `fleet.mjs — introspect the live delegate fleet (read-only)
@@ -27,8 +29,12 @@ Usage:
   node fleet.mjs list   [--cwd <repo>]
   node fleet.mjs pick   --need <role> [--write | --read-only] [--exclude <lane>]... [--cwd <repo>]
   node fleet.mjs effort --lane <name> --level low|medium|high [--cwd <repo>]
+  node fleet.mjs preflight --lane <name> [--level low|medium|high] [--read-only] [--cwd <repo>]
 
 Roles: quick feature ui debug tests docs plan review
+preflight checks the lane binary, version, auth, and model through the registry.
+It does not install, mutate config, print probe output, or start a task.
+Status: ready, unavailable, unknown, unsupported. unavailable and unsupported block.
 `;
 
 /** Name tokens → role. Only used when a lane declares no \`roles\`. */
@@ -106,18 +112,61 @@ async function loadFleet(cwd) {
     };
   });
   return {
-    globalPath: effective.globalPath,
-    projectPath: effective.projectPath,
-    projectPresent: effective.projectPresent,
-    projectTrusted: effective.projectTrusted,
-    lanes,
+    registry,
+    report: {
+      globalPath: effective.globalPath,
+      projectPath: effective.projectPath,
+      projectPresent: effective.projectPresent,
+      projectTrusted: effective.projectTrusted,
+      lanes,
+    },
   };
 }
 
+function probeBudget() {
+  const raw = Number(process.env.ORCHESTRATE_PROBE_MS);
+  if (Number.isFinite(raw) && raw >= 50 && raw <= 10000) return raw;
+  return 4000;
+}
+
+// Relay flags come from a successful --help parse, never from a guessed shape.
+// A failed, nonzero, or unparseable help probe is unknown: no command is invented.
+const relayHelpCache = new Map();
+
+function relayFlags(relay) {
+  if (!relay) return null;
+  if (relayHelpCache.has(relay)) return relayHelpCache.get(relay);
+  const result = runBounded(process.execPath, [relay, "--help"]);
+  let flags = null;
+  if (!result.error && result.status === 0) {
+    const found = `${result.stdout || ""}\n${result.stderr || ""}`.match(/--[a-z][a-z0-9-]*/g);
+    if (found?.length) flags = new Set(found);
+  }
+  relayHelpCache.set(relay, flags);
+  return flags;
+}
+
 function command(lane, readOnly) {
-  const parts = [`node "${lane.relay ?? `<${lane.skill}>/scripts/relay.mjs`}"`, "--brief <brief>", `--lane ${lane.name}`, "--cd <repo>"];
-  if (lane.effort.dial === "effort") parts.push("[--effort <level>]");
-  if (readOnly) parts.push("--read-only");
+  const flags = relayFlags(lane.relay);
+  if (!flags?.has("--brief") || !flags.has("--cd")) return null;
+  const parts = [`node "${lane.relay ?? `<${lane.skill}>/scripts/relay.mjs`}"`, "--brief <brief>"];
+  const laneLess = !flags.has("--lane");
+  if (!laneLess) parts.push(`--lane ${lane.name}`);
+  else if (lane.model) {
+    if (!flags.has("--model")) return null;
+    parts.push(`--model ${lane.model}`);
+  }
+  if (laneLess && typeof lane.dials?.variant === "string" && lane.dials.variant) {
+    if (!flags.has("--variant")) return null;
+    parts.push(`--variant ${lane.dials.variant}`);
+  }
+  parts.push("--cd <repo>");
+  if (lane.effort.dial === "effort" && flags.has("--effort")) parts.push("[--effort <level>]");
+  else if (laneLess && lane.effort.dial === "effort" && typeof lane.dials?.effort === "string" && lane.dials.effort) return null;
+  if (readOnly) {
+    if (!flags.has("--read-only")) return null;
+    parts.push("--read-only");
+  }
   return parts.join(" ");
 }
 
@@ -143,6 +192,193 @@ function pick(fleet, need, { write, readOnly, exclude }) {
     ? `no lane can serve role "${need}"${write ? " with write access" : ""}${readOnly ? " read-only" : ""}; reconfigure with delegate-setup`
     : matched.length === 0 ? `no lane declares or implies "${need}"; feature lanes offered as fallback` : null;
   return { need, untrustedProjectConfig: untrusted, candidates, note };
+}
+
+function resolveBinary(binary) {
+  const pathValue = process.env.PATH || "";
+  if (!pathValue) return null;
+  const entries = pathValue.split(delimiter).filter(Boolean);
+  if (process.platform === "win32") {
+    const exts = (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+    for (const entry of entries) {
+      for (const ext of ["", ...exts]) {
+        const candidate = join(entry, ext ? `${binary}${ext}` : binary);
+        try {
+          if (statSync(candidate).isFile()) return candidate;
+        } catch {
+          // keep looking
+        }
+      }
+    }
+    return null;
+  }
+  for (const entry of entries) {
+    const candidate = join(entry, binary);
+    try {
+      accessSync(candidate, fsConstants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+function runBounded(binary, args) {
+  return spawnSync(binary, args, {
+    encoding: "utf8",
+    timeout: probeBudget(),
+    killSignal: "SIGKILL",
+    cwd: tmpdir(),
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+}
+
+function versionText(impl, result) {
+  if (result.error || result.status !== 0) return null;
+  const line = (result.stdout || "").replace(/\x1b\[[0-9;]*m/g, "").trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (!line) return null;
+  if (impl.versionFormat !== "colon-prefix") return line.slice(0, 200);
+  return (/^([^:\s]+):/.exec(line)?.[1] ?? line).slice(0, 200);
+}
+
+function authStatus(impl, binary) {
+  const probe = impl.authProbe;
+  if (!probe) return "unknown";
+  const result = runBounded(binary, probe.args);
+  const output = `${result.stdout || ""}${result.stderr || ""}`.replace(/\x1b\[[0-9;]*m/g, "");
+  if (probe.jsonField) {
+    const read = (raw) => {
+      try {
+        const value = JSON.parse(raw)[probe.jsonField];
+        return typeof value === "boolean" ? value : null;
+      } catch {
+        return null;
+      }
+    };
+    const parsed = read(result.stdout || "") ?? read(output);
+    if (parsed === true) return "ready";
+    if (parsed === false) return "unavailable";
+    return "unknown";
+  }
+  if (result.error) return "unknown";
+  if (probe.failPattern?.test(output)) return "unavailable";
+  if (probe.successPattern) {
+    if (probe.successPattern.test(output)) return "ready";
+    return result.status === 0 && probe.missMeansFalse ? "unavailable" : "unknown";
+  }
+  return result.status === 0 ? "ready" : "unknown";
+}
+
+function modelIdentifiers(impl, binary) {
+  const probe = impl.modelProbe;
+  if (!probe) return { status: "unsupported" };
+  if (probe.static) return { status: "listed", values: probe.static };
+  if (probe.file) {
+    const base = (probe.envDir && process.env[probe.envDir]) || join(homedir(), probe.homeSubdir);
+    try {
+      const parsed = JSON.parse(readFileSync(join(base, probe.file), "utf8"));
+      if (!Array.isArray(parsed?.models)) return { status: "unknown" };
+      return {
+        status: "listed",
+        values: parsed.models.map((entry) => (typeof entry?.slug === "string" ? entry.slug : "")).filter(Boolean),
+      };
+    } catch {
+      return { status: "unknown" };
+    }
+  }
+  if (!probe.args) return { status: "unsupported" };
+  const result = runBounded(binary, probe.args);
+  if (result.error || result.status !== 0) return { status: "unknown" };
+  const lines = (result.stdout || "").replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  let values = null;
+  if (probe.format === "cursor") {
+    if (lines.includes("Available models")) {
+      values = lines.filter((line) => line !== "Available models" && !line.startsWith("Tip:")).map((line) => line.split(/\s+-\s+/, 1)[0]);
+    }
+  } else if (probe.format === "grok") {
+    const starred = lines.filter((line) => line.startsWith("* ")).map((line) => line.slice(2).replace(/\s*\(default\)$/, "").trim()).filter(Boolean);
+    if (starred.length > 0) values = starred;
+  } else if (probe.format === "table") {
+    const rows = lines.slice(1).map((line) => line.split(/\s+/)).filter((cols) => cols.length >= 2).map((cols) => `${cols[0]}/${cols[1]}`);
+    if (rows.length > 0) values = rows;
+  } else if (lines.length > 0) values = lines;
+  if (!values) return { status: "unknown" };
+  return { status: "listed", values };
+}
+
+function modelStatus(impl, binary, model) {
+  if (typeof model !== "string" || model.length === 0) {
+    return { status: "unknown", reason: "no model configured; the CLI default is not verified" };
+  }
+  const probe = impl.modelProbe;
+  if (!probe) return { status: "unknown", reason: "no credential-free model listing" };
+  const listed = modelIdentifiers(impl, binary);
+  if (listed.status !== "listed") return { status: "unknown", reason: "model listing unavailable" };
+  if (listed.values.includes(model)) return { status: "ready" };
+  // A static alias list or a cached catalog is not exhaustive: a miss means unknown,
+  // never a definitive "unavailable". Only a live listing can call a model unavailable.
+  if (probe.static) return { status: "unknown", reason: "not a known alias; full model names are not enumerable" };
+  if (probe.file) return { status: "unknown", reason: "cached model listing is not definitive" };
+  return { status: "unavailable" };
+}
+
+function overallStatus(checks, untrusted) {
+  const statuses = Object.values(checks).map((check) => check.status);
+  let status = "ready";
+  if (statuses.includes("unknown")) status = "unknown";
+  if (statuses.includes("unavailable") || untrusted) status = "unavailable";
+  if (statuses.includes("unsupported")) status = "unsupported";
+  return { status, blocked: untrusted || status === "unavailable" || status === "unsupported" };
+}
+
+function preflight(fleet, registry, opts) {
+  const lane = fleet.lanes.find((item) => item.name === opts.lane);
+  if (!lane) throw new Error(`lane not found: ${opts.lane}`);
+  const impl = registry.IMPLEMENTER_BY_KEY[lane.implementer];
+  const untrusted = Boolean(fleet.projectPresent && !fleet.projectTrusted);
+  if (untrusted) {
+    return {
+      lane: lane.name,
+      implementer: lane.implementer,
+      readOnly: opts.readOnly,
+      untrustedProjectConfig: true,
+      status: "unavailable",
+      blocked: true,
+      checks: { config: { status: "unavailable", reason: "project fleet config is not trusted" } },
+    };
+  }
+  const checks = {};
+  const binary = resolveBinary(impl.binary);
+  if (!binary) checks.binary = { status: "unavailable" };
+  else {
+    let version = versionText(impl, runBounded(binary, impl.versionArgs));
+    if (version === null && impl.versionFallbackArgs) version = versionText(impl, runBounded(binary, impl.versionFallbackArgs));
+    checks.binary = version ? { status: "ready", version } : { status: "unavailable" };
+  }
+  checks.auth = { status: binary && checks.binary.status === "ready" ? authStatus(impl, binary) : "unknown" };
+  checks.model = binary || !impl.modelProbe?.args ? modelStatus(impl, binary, lane.model) : { status: "unknown" };
+  if (!opts.readOnly) checks.readOnly = { status: "ready" };
+  else if (impl.supports.includes("readOnly")) checks.readOnly = { status: "ready" };
+  else checks.readOnly = { status: "unsupported" };
+  if (!opts.level) checks.effort = { status: "ready", flag: null };
+  else {
+    const mapped = effort(fleet, lane.name, opts.level);
+    // A dial-less or variant lane cannot take a physical effort flag; the level is
+    // expressed in the brief instead. That is supported, not a blocker.
+    checks.effort = mapped.flag
+      ? { status: "ready", flag: mapped.flag }
+      : { status: "ready", flag: null, briefOnly: true, dial: mapped.dial };
+  }
+  return {
+    lane: lane.name,
+    implementer: lane.implementer,
+    readOnly: opts.readOnly,
+    untrustedProjectConfig: false,
+    ...overallStatus(checks, false),
+    checks,
+  };
 }
 
 function effort(fleet, laneName, level) {
@@ -179,8 +415,10 @@ async function main(argv) {
   }
   try {
     const o = parse(argv);
-    const fleet = await loadFleet(o.cwd);
+    const loaded = await loadFleet(o.cwd);
+    const fleet = loaded.report;
     let result;
+    let code = 0;
     if (o.cmd === "list") result = fleet;
     else if (o.cmd === "pick") {
       if (!o.need) throw new Error("pick requires --need <role>");
@@ -189,8 +427,13 @@ async function main(argv) {
     } else if (o.cmd === "effort") {
       if (!o.lane || !o.level) throw new Error("effort requires --lane and --level");
       result = effort(fleet, o.lane, o.level);
+    } else if (o.cmd === "preflight") {
+      if (!o.lane) throw new Error("preflight requires --lane <name>");
+      result = preflight(fleet, loaded.registry, o);
+      code = result.blocked ? 1 : 0;
     } else throw new Error(`unknown command ${JSON.stringify(o.cmd)}`);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    if (code !== 0) process.exit(code);
   } catch (error) {
     process.stderr.write(`fleet.mjs: ${error.message}\n`);
     process.exit(2);

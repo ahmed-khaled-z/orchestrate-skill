@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -131,4 +131,66 @@ test("effort mapping: level → dial value per implementer", () => {
   assert.equal(oc.flag, null);
   const agy = run(fleetHome(BASE), "effort", "--lane", "ui-ux", "--level", "high").json;
   assert.equal(agy.dial, null);
+});
+
+function fakeSkills(helpBody, helpStatus) {
+  const root = mkdtempSync(join(tmpdir(), "orchestrate-fleet-skills-"));
+  const setupScripts = join(root, "delegate-setup", "scripts");
+  mkdirSync(setupScripts, { recursive: true });
+  const realScripts = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "delegate-setup", "scripts");
+  symlinkSync(join(realScripts, "config.mjs"), join(setupScripts, "config.mjs"));
+  symlinkSync(join(realScripts, "implementers.mjs"), join(setupScripts, "implementers.mjs"));
+  const relayDir = join(root, "grok-delegate", "scripts");
+  mkdirSync(relayDir, { recursive: true });
+  writeFileSync(
+    join(relayDir, "relay.mjs"),
+    `if (process.argv.includes("--help")) {\n  process.stdout.write(${JSON.stringify(helpBody)});\n  process.exit(${helpStatus});\n}\nprocess.exit(0);\n`,
+  );
+  return join(root, "delegate-setup");
+}
+
+function runIn(home, setupDir, args) {
+  const r = spawnSync("node", [FLEET, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, XDG_CONFIG_HOME: home, DELEGATE_SETUP_DIR: setupDir },
+  });
+  return {
+    status: r.status,
+    stderr: r.stderr ?? "",
+    stdout: r.stdout ?? "",
+    json: (r.stdout ?? "").trim().startsWith("{") ? JSON.parse(r.stdout) : null,
+  };
+}
+
+test("nonzero or incomplete relay help does not invent selector flags", () => {
+  const home = fleetHome({
+    "fix-bugs": { implementer: "grok", model: "grok-code-fast-1", effort: "high", roles: ["debug"] },
+  });
+  const failed = runIn(home, fakeSkills("--brief --cd --lane --model --effort\n", 2), ["pick", "--need", "debug", "--cwd", tmpdir()]);
+  assert.equal(failed.status, 0, failed.stderr);
+  assert.equal(failed.json.candidates[0].command, null);
+  assert.equal(`${failed.stdout}`.includes("--lane"), false);
+  const thin = runIn(home, fakeSkills("--brief --cd\n", 0), ["pick", "--need", "debug", "--cwd", tmpdir()]);
+  assert.equal(thin.status, 0, thin.stderr);
+  assert.equal(thin.json.candidates[0].command, null);
+  assert.equal(`${thin.stdout}`.includes("--model"), false);
+  const preserved = runIn(home, fakeSkills("--brief --cd --model --effort\n", 0), ["pick", "--need", "debug", "--cwd", tmpdir()]);
+  assert.equal(preserved.status, 0, preserved.stderr);
+  assert.match(preserved.json.candidates[0].command, /--model grok-code-fast-1/);
+  assert.equal(preserved.json.candidates[0].command.includes("--lane"), false);
+});
+
+test("pick prints only flags the actual relay accepts (grok has no --lane)", () => {
+  const home = fleetHome({
+    "fix-bugs": { implementer: "grok", model: "grok-code-fast-1", effort: "high" },
+    "plan-main": { implementer: "claude", model: "opus", effort: "high" },
+  });
+  const grok = run(home, "pick", "--need", "debug").json;
+  assert.equal(grok.candidates[0].name, "fix-bugs");
+  assert.equal(grok.candidates[0].command.includes("--lane"), false);
+  assert.match(grok.candidates[0].command, /--model grok-code-fast-1/);
+  assert.match(grok.candidates[0].command, /--brief <brief>/);
+  const claude = run(home, "pick", "--need", "plan").json;
+  assert.equal(claude.candidates[0].name, "plan-main");
+  assert.match(claude.candidates[0].command, /--lane plan-main/);
 });

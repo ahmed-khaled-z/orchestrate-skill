@@ -10,8 +10,10 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "specialists.mjs");
 
-const md = (name, description) => `---\nname: "${name}"\ndescription: "${description}"\n---\n\nBody.\n`;
-const toml = (name, description) => `name = "${name}"\ndescription = "${description}"\n`;
+const md = (name, description, body = "Body.") =>
+  `---\nname: "${name}"\ndescription: "${description}"\n---\n\n${body}\n`;
+const toml = (name, description, body = "Body.") =>
+  `name = "${name}"\ndescription = "${description}"\ndeveloper_instructions = ${JSON.stringify(`\n${body}\n`)}\n`;
 
 function rosterHome({ claude = {}, codex = {} } = {}) {
   const home = mkdtempSync(join(tmpdir(), "orchestrate-specialists-"));
@@ -44,8 +46,8 @@ test("1. joins twins by profile name, not filename", () => {
       "engineering-bar.md": md("Bar Engineer", "bar things"),
     },
     codex: {
-      "foo-engineer.toml": toml("Foo Engineer", "toml foo things"),
-      "bar.toml": toml("Bar Engineer", "toml bar things"),
+      "foo-engineer.toml": toml("Foo Engineer", "foo things"),
+      "bar.toml": toml("Bar Engineer", "bar things"),
     },
   });
   const a = run(home, ["audit"]);
@@ -70,7 +72,7 @@ test("2. reads CLAUDE_CONFIG_DIR and CODEX_HOME instead of HOME", () => {
   mkdirSync(join(cfg, "agents"), { recursive: true });
   mkdirSync(join(cx, "agents"), { recursive: true });
   writeFileSync(join(cfg, "agents", "real.md"), md("Real Engineer", "real things"));
-  writeFileSync(join(cx, "agents", "real.toml"), toml("Real Engineer", "toml real"));
+  writeFileSync(join(cx, "agents", "real.toml"), toml("Real Engineer", "real things"));
   const env = { CLAUDE_CONFIG_DIR: cfg, CODEX_HOME: cx };
   const a = run(home, ["audit"], env);
   assert.equal(a.status, 0);
@@ -114,8 +116,9 @@ test("4. duplicates and bad files are reported and excluded from find", () => {
     join(codexAgents, "lit.toml"),
   ]);
   const q = run(home, ["find", "--query", "dup engineer"]);
-  assert.equal(q.json.candidates.length, 1);
-  assert.equal(q.json.candidates[0].profile, join(claudeAgents, "dup-a.md"), "first sorted duplicate wins, deterministically");
+  assert.equal(q.status, 1);
+  assert.deepEqual(q.json.candidates, [], "duplicate names are excluded from find");
+  assert.match(q.json.note, /duplicate/i);
   const lit = run(home, ["find", "--query", "literal"]);
   assert.deepEqual(lit.json.candidates, [], "problem files never appear in find results");
 });
@@ -128,7 +131,7 @@ test("5. deterministic find: score order, name tiebreak, byte-identical runs, --
       "db.md": md("Database Helper", "postgres tips"),
     },
     codex: {
-      "persist.toml": toml("Postgres Migration Engineer", "schema tools"),
+      "persist.toml": toml("Postgres Migration Engineer", "schema tools for databases"),
       "schemadoc.toml": toml("Schema Doc Writer", "postgres migration guides"),
       "db.toml": toml("Database Helper", "postgres tips"),
     },
@@ -156,7 +159,7 @@ test("5. deterministic find: score order, name tiebreak, byte-identical runs, --
 test("6. --name is exact: case matters, missing name notes and exits 1", () => {
   const { home } = rosterHome({
     claude: { "foo.md": md("Foo Engineer", "foo things") },
-    codex: { "foo.toml": toml("Foo Engineer", "toml foo") },
+    codex: { "foo.toml": toml("Foo Engineer", "foo things") },
   });
   const hit = run(home, ["find", "--name", "Foo Engineer"]);
   assert.equal(hit.status, 0);
@@ -176,11 +179,11 @@ test("6. --name is exact: case matters, missing name notes and exits 1", () => {
 test("7. no cache: roster changes are visible to the next invocation", () => {
   const { home, claudeAgents, codexAgents } = rosterHome({
     claude: { "foo.md": md("Foo Engineer", "foo things") },
-    codex: { "foo.toml": toml("Foo Engineer", "toml foo") },
+    codex: { "foo.toml": toml("Foo Engineer", "foo things") },
   });
   assert.equal(run(home, ["find", "--name", "Bar Engineer"]).status, 1);
   writeFileSync(join(claudeAgents, "bar.md"), md("Bar Engineer", "bar things"));
-  writeFileSync(join(codexAgents, "bar.toml"), toml("Bar Engineer", "toml bar"));
+  writeFileSync(join(codexAgents, "bar.toml"), toml("Bar Engineer", "bar things"));
   const after = run(home, ["find", "--name", "Bar Engineer"]);
   assert.equal(after.status, 0);
   assert.equal(after.json.candidates[0].name, "Bar Engineer");
@@ -189,7 +192,7 @@ test("7. no cache: roster changes are visible to the next invocation", () => {
 test("8. no token overlap: empty candidates, broaden note, exit 1", () => {
   const { home } = rosterHome({
     claude: { "foo.md": md("Foo Engineer", "foo things") },
-    codex: { "foo.toml": toml("Foo Engineer", "toml foo") },
+    codex: { "foo.toml": toml("Foo Engineer", "foo things") },
   });
   const r = run(home, ["find", "--query", "kubernetes helmfile"]);
   assert.equal(r.status, 1);

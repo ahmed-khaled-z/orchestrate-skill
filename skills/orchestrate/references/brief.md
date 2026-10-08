@@ -49,7 +49,9 @@ read itself — name them. Fill the `profile=` attribute with the path printed b
 
   <verification_loop>
     Run these before finishing and fix what they surface within scope:
-      <repo's real test command>   <repo's real lint/typecheck/build command>
+      <repo's real test command>   <side-effect-free lint/typecheck/build command>
+    The orchestrator already opened the script chain. Do not run a command that migrates,
+    deploys, bills, or writes customer data unless this brief lists it.
     Confirm the working tree shows only intended changes.
   </verification_loop>
 
@@ -131,8 +133,9 @@ read itself — name them. Fill the `profile=` attribute with the path printed b
   (scope, leave_untouched, requirements, acceptance_criteria, report_contract) → required_skills
   (including ponytail) → specialist profile (domain judgment only). Profile instructions that
   conflict with 1–4 yield.
-- **Read-only tasks** (diagnosis, planning, review) use the relay's read-only mode and say
-  "produce findings, touch no files"; verify `touchedFiles` is empty afterwards.
+- **Read-only tasks** (diagnosis, planning, review) use `run-task --read-only` and say
+  "produce findings, touch no files". The resolved plan comes before that relay. Afterwards
+  `readOnlyViolation` is false and `changes` is empty. Relay `touchedFiles` is not the task delta.
 - **Unknown root cause = two briefs**: a read-only `systematic-debugging` diagnosis first, then a
   writable fix brief citing the evidence. Never one speculative "find and fix" brief.
 - **Dependencies are inputs, not instructions.** Paste the concrete result of a prerequisite task

@@ -1,6 +1,6 @@
 # orchestrate
 
-A Claude Code skill that runs software tasks through your **delegate fleet** at the highest
+A Codex and Claude Code skill that runs software tasks through your **delegate fleet** at the highest
 practical quality in the shortest practical time. It classifies the task, reads the live lane map
 from `delegate-setup`, picks the lane, effort, and skills each sub-task needs, dispatches
 implementers in parallel where safe, verifies with fresh evidence, reviews with `debate-review`,
@@ -20,7 +20,7 @@ Installed as skills next to this one (`~/.agents/skills/`):
 - [`delegate-setup`](https://github.com/amElnagdy/delegate-skills) plus at least one `*-delegate` relay
   (codex, opencode, claude, agy, grok, kimi …), with lanes configured via `$delegate-setup`.
 - [`debate-review` and `babysit-pr`](https://github.com/amElnagdy/review-skills).
-- `ponytail` (plugin), `ui-ux-pro-max`, `frontend-design`.
+- `ponytail` (plugin), `caveman`, `ui-ux-pro-max`, `frontend-design`.
 - The Superpowers plugin (`brainstorming`, `writing-plans`, `systematic-debugging`,
   `test-driven-development`, `verification-before-completion`, `receiving-code-review`, …).
 - **Agency Agents** installed in both `~/.claude/agents/` and `~/.codex/agents/` — `scripts/specialists.mjs` scans both rosters, pairs profiles by exact name, and fails loud on mismatches. See [msitarzewski/agency-agents](https://github.com/msitarzewski/agency-agents).
@@ -67,9 +67,20 @@ node --test ~/.agents/skills/orchestrate/tests/fleet.test.mjs
 /build Add order cancellation with refund calculation, tests, and docs
 ```
 
-What you get back: a per-task routing table (lane, implementer, model, effort, skills,
-dependencies, verification) before the first dispatch, then a short report: result, changes,
-lanes/models, effort per task, skills, verification commands with counts, review status, open risks.
+Version **0.3.0** shows a compact plan in the user's language before any tools. Each task names
+its lane, implementer, model, effort, specialist, skills, dependencies, checks, review, and execution
+limits. Unknown routes stay `pending lookup`; the resolved plan appears before any delegate runs.
+Plans use `caveman`, and work continues under the user's existing authorization.
+
+Execution now uses fleet preflight, content snapshots, and a persistent task runner. Retry and
+fallback attempts keep the same task id, elapsed budget, and attempt count. Task locks prevent
+concurrent dispatch of the same task; other writers require isolated worktrees. Configured
+read-only lanes stay read-only. Specialist discovery
+supports domain synonyms, and the roster audit compares Claude and Codex profile instructions.
+Verification checks script side effects before running them.
+
+The final report covers result, changes, lanes/models, effort, skills, checks, review, and open risks.
+See [dispatch guidance](skills/orchestrate/references/dispatch.md) for commands and recovery limits.
 
 ## How routing works
 
@@ -132,12 +143,14 @@ Details: `skills/orchestrate/references/routing.md` §5.
 - Specialist routing scenarios J–N in `scenarios.md`: owner fit lines, advisor separation,
   collision handling, missing-profile behavior, no-fit stop.
 
-Run both test suites:
+Run all runtime suites (fleet/preflight, snapshots, task runner, and specialist discovery/audit):
 
 ```bash
-node --test ~/.agents/skills/orchestrate/tests/fleet.test.mjs
-node --test ~/.agents/skills/orchestrate/tests/specialists.test.mjs
+node --test ~/.agents/skills/orchestrate/tests/*.test.mjs
 ```
+
+The 0.3.0 release passed 97 runtime tests and two final plan behavior samples. Historical test
+results and limitations are recorded in `skills/orchestrate/tests/results.md`.
 
 ## Uninstall
 
